@@ -1,0 +1,339 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>字段分类治理台</title>
+<style>
+  :root { --ok:#1a7f37; --warn:#9a6700; --bad:#cf222e; --unk:#6f42c1; --line:#d0d7de; }
+  * { box-sizing: border-box; }
+  body { font-family: -apple-system, "PingFang SC", "Microsoft YaHei", sans-serif;
+         margin: 0; background: #f6f8fa; color: #1f2328; }
+  header { background: #0b3050; color: #fff; padding: 12px 20px; }
+  header h1 { font-size: 18px; margin: 0; }
+  header .sub { font-size: 12px; opacity: .8; margin-top: 4px; }
+  nav { display: flex; gap: 4px; background: #fff; border-bottom: 1px solid var(--line);
+        padding: 0 16px; }
+  nav button { border: 0; background: none; padding: 12px 14px; cursor: pointer;
+               font-size: 14px; border-bottom: 2px solid transparent; }
+  nav button.active { border-bottom-color: #0b3050; font-weight: 600; }
+  main { padding: 16px 20px; max-width: 1200px; }
+  .card { background: #fff; border: 1px solid var(--line); border-radius: 8px;
+          padding: 14px 16px; margin-bottom: 14px; }
+  table { border-collapse: collapse; width: 100%; font-size: 13px; }
+  th, td { border-bottom: 1px solid #eaeef2; padding: 6px 8px; text-align: left;
+           vertical-align: top; }
+  th { background: #f6f8fa; }
+  select, button.act { font-size: 13px; padding: 3px 8px; }
+  button.act { border: 1px solid var(--line); border-radius: 6px; background: #fff;
+               cursor: pointer; margin: 2px 2px; }
+  button.act:hover { background: #f0f4f8; }
+  button.primary { background: #0b3050; color: #fff; border-color: #0b3050; }
+  .badge { display: inline-block; padding: 1px 8px; border-radius: 10px; font-size: 12px; }
+  .b-ok { background: #dafbe1; color: var(--ok); }
+  .b-warn { background: #fff8c5; color: var(--warn); }
+  .b-bad { background: #ffebe9; color: var(--bad); }
+  .b-unk { background: #fbefff; color: var(--unk); }
+  .b-neutral { background: #eaeef2; color: #57606a; }
+  .path { font-family: ui-monospace, monospace; font-size: 12px; color: #57606a;
+          background: #f6f8fa; border-radius: 4px; padding: 4px 6px; margin: 3px 0;
+          display: block; word-break: break-all; }
+  .tree ul { list-style: none; border-left: 2px solid var(--line); padding-left: 14px;
+             margin: 4px 0; }
+  .tree .node { margin: 4px 0; font-size: 13px; }
+  .edge-label { color: #0969da; font-size: 12px; }
+  .muted { color: #57606a; font-size: 12px; }
+  .banner { padding: 8px 12px; border-radius: 6px; font-size: 13px; margin-bottom: 10px; }
+  .banner.info { background: #ddf4ff; }
+  .banner.danger { background: #ffebe9; }
+  .hidden { display: none; }
+  h3 { margin: 4px 0 10px; font-size: 15px; }
+  .grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
+  code { background: #f6f8fa; padding: 1px 4px; border-radius: 4px; }
+</style>
+</head>
+<body>
+<header>
+  <h1>字段分类治理台</h1>
+  <div class="sub">分类登记 · 表达式级血缘影响分析 · 精确阻断 · 安全替代版审批 · 晚完成任务模拟</div>
+</header>
+<nav>
+  <button data-tab="fields" class="active">① 字段分类</button>
+  <button data-tab="impact">② 影响路径</button>
+  <button data-tab="exports">③ 导出与发布</button>
+  <button data-tab="audit">④ 审计与标记扫描</button>
+</nav>
+<main>
+  <div id="state-banner" class="banner info">加载中…</div>
+
+  <section id="tab-fields">
+    <div class="card">
+      <h3>源表字段分类 <span class="muted">（修改后立即重算影响，并通知发布服务复核已分发产物）</span></h3>
+      <table id="src-fields"><thead><tr>
+        <th>数据集</th><th>字段</th><th>当前分类</th><th>修改为</th><th>操作</th><th>最近变更</th>
+      </tr></thead><tbody></tbody></table>
+    </div>
+    <div class="card">
+      <h3>派生字段有效状态 <span class="muted">（由血缘传播计算，非人工登记）</span></h3>
+      <table id="derived-fields"><thead><tr>
+        <th>数据集</th><th>字段</th><th>有效状态</th><th>判断依据（传播路径）</th>
+      </tr></thead><tbody></tbody></table>
+    </div>
+    <div class="card" id="change-result"></div>
+  </section>
+
+  <section id="tab-impact" class="hidden">
+    <div class="card">
+      <h3>影响路径 <span class="muted">（假设该字段为敏感，沿表达式级血缘向下游传播）</span></h3>
+      <select id="impact-field"></select>
+      <div id="impact-summary" style="margin:10px 0"></div>
+      <div id="impact-tree" class="tree"></div>
+    </div>
+  </section>
+
+  <section id="tab-exports" class="hidden">
+    <div class="card">
+      <h3>加工与发布操作</h3>
+      <button class="act primary" onclick="doSeed()">生成源数据（含CANARY标记）</button>
+      <button class="act primary" onclick="doRunAll()">运行全部加工任务</button>
+      <button class="act" onclick="doLateJob()">⚠ 模拟旧加工任务晚完成（export_marketing）</button>
+      <button class="act" onclick="doEnforce()">复核已分发产物（/enforce）</button>
+      <div id="op-result" style="margin-top:8px"></div>
+    </div>
+    <div class="card">
+      <h3>导出物状态</h3>
+      <table id="exports-table"><thead><tr>
+        <th>导出</th><th>当前判定</th><th>判断依据</th><th>分发状态</th><th>操作</th>
+      </tr></thead><tbody></tbody></table>
+    </div>
+  </section>
+
+  <section id="tab-audit" class="hidden">
+    <div class="card">
+      <h3>可追踪标记扫描 <span class="muted">（核对被阻断数据是否仍在分发目录）</span></h3>
+      <button class="act" onclick="loadScan()">重新扫描</button>
+      <div id="scan-result" style="margin-top:8px"></div>
+    </div>
+    <div class="grid2">
+      <div class="card"><h3>分类与审批审计</h3><div id="audit-log"></div></div>
+      <div class="card"><h3>发布决策日志</h3><div id="publish-log"></div></div>
+    </div>
+  </section>
+</main>
+
+<script>
+const SCH = 'http://127.0.0.1:7802';
+const PUB = 'http://127.0.0.1:7803';
+const $ = s => document.querySelector(s);
+
+async function j(url, opts) {
+  const r = await fetch(url, opts ? {method:'POST', headers:{'Content-Type':'application/json'},
+                                     body: JSON.stringify(opts)} : undefined);
+  return r.json();
+}
+const esc = s => String(s ?? '').replace(/[&<>]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;'}[c]));
+
+function badge(verdict) {
+  if (verdict === 'ok') return '<span class="badge b-ok">安全</span>';
+  if (verdict === 'needs_approval') return '<span class="badge b-warn">需审批（假名化）</span>';
+  if (verdict === 'blocked') return '<span class="badge b-bad">应阻断</span>';
+  return '<span class="badge b-neutral">-</span>';
+}
+
+// ---------- 页签 ----------
+document.querySelectorAll('nav button').forEach(b => b.onclick = () => {
+  document.querySelectorAll('nav button').forEach(x => x.classList.remove('active'));
+  b.classList.add('active');
+  document.querySelectorAll('main > section').forEach(s => s.classList.add('hidden'));
+  $('#tab-' + b.dataset.tab).classList.remove('hidden');
+  refreshTab(b.dataset.tab);
+});
+function refreshTab(tab) {
+  if (tab === 'fields') loadFields();
+  if (tab === 'impact') loadImpact();
+  if (tab === 'exports') loadExports();
+  if (tab === 'audit') { loadScan(); loadAudit(); }
+}
+
+// ---------- 状态条 ----------
+async function loadState() {
+  const s = await j('/classification_state');
+  $('#state-banner').innerHTML = `分类版本 <b>v${s.version}</b>` +
+    (s.last_change_at ? ` · 最近变更 ${esc(s.last_change_at)}` : ' · 尚无分类变更') +
+    ` · 策略：发布时按当前分类判定（晚完成的旧任务产物同样受控）`;
+}
+
+// ---------- ① 字段分类 ----------
+async function loadFields() {
+  const {fields} = await j('/fields');
+  const src = fields.filter(f => f.kind === 'source');
+  const der = fields.filter(f => f.kind !== 'source');
+  $('#src-fields tbody').innerHTML = src.map(f => `<tr>
+    <td>${esc(f.dataset)}</td><td>${esc(f.column)}</td>
+    <td><span class="badge ${f.classification==='sensitive'?'b-bad':'b-ok'}">${esc(f.classification)}</span></td>
+    <td><select id="cls-${f.dataset}-${f.column}">
+      ${['normal','internal','sensitive'].map(c =>
+        `<option ${c===f.classification?'selected':''}>${c}</option>`).join('')}
+    </select></td>
+    <td><button class="act primary" onclick="changeCls('${f.dataset}','${f.column}')">应用变更</button></td>
+    <td class="muted">${esc(f.updated_by||'')} ${esc(f.updated_at||'')}</td>
+  </tr>`).join('');
+  $('#derived-fields tbody').innerHTML = der.map(f => `<tr>
+    <td>${esc(f.dataset)}</td><td>${esc(f.column)}</td>
+    <td>${badge(f.effective)}${f.unknown?' <span class="badge b-unk">未知转换</span>':''}</td>
+    <td>${f.path ? `<span class="path">${esc(f.path)}</span>` : '<span class="muted">无敏感来源</span>'}</td>
+  </tr>`).join('');
+  // 影响路径页的下拉框
+  const sel = $('#impact-field');
+  const cur = sel.value;
+  sel.innerHTML = src.map(f =>
+    `<option value="${f.dataset}.${f.column}">${f.dataset}.${f.column}</option>`).join('');
+  if (cur) sel.value = cur;
+}
+
+async function changeCls(dataset, column) {
+  const classification = $(`#cls-${dataset}-${column}`).value;
+  const actor = prompt('操作人', 'data-governor') || 'data-governor';
+  const r = await j('/classifications', {dataset, column, classification, actor});
+  const el = $('#change-result');
+  if (!r.ok) { el.innerHTML = `<div class="banner danger">${esc(r.error)}</div>`; return; }
+  el.innerHTML = `<div class="banner ${r.impacted_exports.length?'danger':'info'}">
+    <b>${esc(r.field)}</b>：${esc(r.old)} → <b>${esc(r.new)}</b>（版本 v${r.version}）<br>
+    受影响导出：${r.impacted_exports.map(e =>
+      `${esc(e.export)}=${e.verdict}`).join('，') || '无'}<br>
+    <span class="muted">${esc(r.strategy_compare.stop_all)} ｜ ${esc(r.strategy_compare.precise)}</span>
+    ${r.enforce && r.enforce.actions ? '<br>发布服务复核：' + r.enforce.actions.map(a =>
+      `${esc(a.export)} → ${a.action==='quarantine'?'<b>已隔离</b>':'保留'}`).join('；') : ''}
+  </div>`;
+  loadFields(); loadState();
+}
+
+// ---------- ② 影响路径 ----------
+function renderNode(n) {
+  const b = badge(n.tier===2?'blocked':n.tier===1?'needs_approval':'ok');
+  return `<div class="node">
+    ${n.edge?`<span class="edge-label">—[${esc(n.edge)}]→</span> `:''}
+    <b>${esc(n.node)}</b> ${b}${n.unknown?' <span class="badge b-unk">未知转换</span>':''}
+    ${n.note?`<div class="muted">${esc(n.note)}</div>`:''}
+    ${n.children && n.children.length ? '<ul>' + n.children.map(c =>
+      '<li>'+renderNode(c)+'</li>').join('') + '</ul>' : ''}
+  </div>`;
+}
+async function loadImpact() {
+  const v = $('#impact-field').value;
+  if (!v) return;
+  const [dataset, column] = v.split('.');
+  const r = await j(`/impact?dataset=${dataset}&column=${column}`);
+  $('#impact-summary').innerHTML = `
+    <div class="banner ${r.affected_exports.length?'danger':'info'}">
+      受影响导出 ${r.affected_exports.length} / ${r.total_exports}：
+      ${r.affected_exports.map(e => `${esc(e.export)}（${e.verdict}）`).join('，') || '无'}<br>
+      <span class="muted">策略对比 — ${esc(r.strategy_compare.stop_all)} ｜
+      ${esc(r.strategy_compare.precise)}</span>
+    </div>`;
+  $('#impact-tree').innerHTML = renderNode(r.tree);
+}
+$('#impact-field').addEventListener('change', loadImpact);
+
+// ---------- ③ 导出与发布 ----------
+async function loadExports() {
+  const {exports} = await j(PUB + '/status');
+  $('#exports-table tbody').innerHTML = exports.map(e => {
+    const reasons = (e.reasons||[]).map(r => `<span class="path">${esc(r.path||r)}</span>`).join('');
+    const dist = e.distributed ? '<span class="badge b-ok">分发中</span>'
+                               : '<span class="badge b-neutral">未分发</span>';
+    const approveBtn = (e.verdict === 'needs_approval' && e.staged)
+      ? `<button class="act primary" onclick="approveSafe('${e.export}','${e.staged_hash}')">批准安全替代版</button>` : '';
+    const pubBtn = e.staged
+      ? `<button class="act" onclick="doPublish('${e.export}')">尝试发布</button>` : '';
+    return `<tr>
+      <td><b>${esc(e.export)}</b><br><span class="muted">${e.staged?'hash '+e.staged_hash.slice(0,10)+'…':'未生成'}</span></td>
+      <td>${badge(e.verdict)}<br><span class="muted">${esc(e.policy||'')}</span></td>
+      <td>${reasons || '<span class="muted">无敏感来源</span>'}</td>
+      <td>${dist}${e.last_decision?`<br><span class="muted">最近决策：${esc(e.last_decision.decision)}</span>`:''}</td>
+      <td>${pubBtn}${approveBtn}</td>
+    </tr>`;
+  }).join('');
+}
+async function doSeed() {
+  const r = await j(SCH + '/seed', {});
+  $('#op-result').innerHTML = `<div class="banner info">源数据已生成：${JSON.stringify(r.stats)}</div>`;
+}
+async function doRunAll() {
+  $('#op-result').innerHTML = '<div class="banner info">运行中…</div>';
+  const r = await j(SCH + '/run_all', {});
+  $('#op-result').innerHTML = `<div class="banner info">已完成 ${r.runs.length} 个作业：
+    ${r.runs.map(x=>`${x.job}(${x.rows}行)`).join('、')}</div>`;
+  loadExports();
+}
+async function doLateJob() {
+  const s = await j('/classification_state');
+  if (!s.last_change_at) {
+    $('#op-result').innerHTML = '<div class="banner danger">尚无分类变更，无法模拟“变更前启动的任务”。请先在①中修改分类。</div>';
+    return;
+  }
+  // 旧任务：started_at 设为分类变更之前，现在才完成
+  const started = new Date(new Date(s.last_change_at).getTime() - 10*60*1000).toISOString();
+  const run = await j(SCH + '/run', {job: 'export_marketing', started_at: started, actor: 'late-job-sim'});
+  const pub = await j(PUB + '/publish', {export: 'export_marketing', actor: 'late-job-sim'});
+  $('#op-result').innerHTML = `<div class="banner ${pub.decision==='blocked'?'danger':'info'}">
+    旧任务晚完成：started_at=${esc(started)}，现在才产出 export_marketing。<br>
+    发布判定：<b>${esc(pub.decision)}</b>（判定用的是当前分类，而非任务启动时）<br>
+    ${pub.reasons.map(r=>`<span class="path">${esc(r)}</span>`).join('')}</div>`;
+  loadExports();
+}
+async function doPublish(exportName) {
+  const r = await j(PUB + '/publish', {export: exportName, actor: 'web-user'});
+  $('#op-result').innerHTML = `<div class="banner ${r.decision==='blocked'?'danger':'info'}">
+    ${esc(exportName)} → <b>${esc(r.decision)}</b><br>
+    ${(r.reasons||[]).map(x=>`<span class="path">${esc(x)}</span>`).join('')}</div>`;
+  loadExports();
+}
+async function approveSafe(exportName, hash) {
+  const actor = prompt('审批人（批准该内容哈希对应的安全替代版）', 'dpo') || 'dpo';
+  await j('/approvals', {export: exportName, content_hash: hash, actor,
+                         note: '安全替代版：敏感列已去除或掩码'});
+  const r = await j(PUB + '/publish', {export: exportName, actor});
+  $('#op-result').innerHTML = `<div class="banner info">审批后发布结果：<b>${esc(r.decision)}</b><br>
+    ${(r.reasons||[]).map(x=>`<span class="path">${esc(x)}</span>`).join('')}</div>`;
+  loadExports();
+}
+async function doEnforce() {
+  const r = await j(PUB + '/enforce', {actor: 'web-user'});
+  $('#op-result').innerHTML = `<div class="banner info">复核完成：
+    ${(r.actions||[]).map(a=>`${esc(a.export)} → ${a.action==='quarantine'?'<b>已隔离</b>':'保留'}`).join('；')||'无产物'}</div>`;
+  loadExports();
+}
+
+// ---------- ④ 审计与扫描 ----------
+async function loadScan() {
+  const r = await j(PUB + '/scan');
+  const fmt = o => Object.keys(o.files).length
+    ? Object.entries(o.files).map(([f,n])=>`${esc(f)}（${n}处）`).join('、') : '无标记';
+  $('#scan-result').innerHTML = `
+    <div class="banner ${r.ok?'info':'danger'}">
+      分发目录（distribution）：标记 <b>${r.distribution.total}</b> 处 — ${fmt(r.distribution)}
+      ${r.ok ? ' ✅ 被阻断数据未再分发' : ' ❌ 发现敏感标记外泄！'}<br>
+      隔离区（quarantine）：标记 ${r.quarantine.total} 处 — ${fmt(r.quarantine)}
+      <span class="muted">（隔离区有标记是正常的：被阻断的产物集中在此，不再对外分发）</span>
+    </div>`;
+}
+async function loadAudit() {
+  const [a, p] = await Promise.all([j('/audit'), j(PUB + '/log')]);
+  $('#audit-log').innerHTML = '<table>' + a.audit.map(r =>
+    `<tr><td class="muted">${esc(r.ts)}</td><td>${esc(r.actor)}</td><td>${esc(r.action)}</td>
+     <td class="muted" style="font-size:11px">${esc(r.detail)}</td></tr>`).join('') + '</table>';
+  $('#publish-log').innerHTML = '<table>' + p.log.map(r =>
+    `<tr><td class="muted">${esc(r.ts)}</td><td><b>${esc(r.export)}</b></td>
+     <td>${esc(r.decision)}</td>
+     <td>${(Array.isArray(r.reasons)?r.reasons:[r.reasons]).map(x=>`<span class="path">${esc(x)}</span>`).join('')}</td></tr>`).join('') + '</table>';
+}
+
+// ---------- 启动 ----------
+(async () => {
+  await loadState();
+  await loadFields();
+  setInterval(loadState, 5000);
+})();
+</script>
+</body>
+</html>
